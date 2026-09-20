@@ -83,14 +83,26 @@ jobs:
           # over the top and silently undoes all of this.
           echo "$FLUTTER_ENGINE" > flutter/bin/cache/engine-dart-sdk.stamp
 
+          # The tarball also ships flutter_tools.snapshot precompiled for x64.
+          # An arm64 Dart VM refuses it outright:
+          #   "the snapshot requires '... x64 linux ...' but the VM has
+          #    '... arm64 linux ...'"
+          # Removing the snapshot and its stamp makes bin/internal/shared.sh
+          # recompile the tool with the arm64 Dart on first invocation. Costs
+          # a couple of minutes, once.
+          rm -f flutter/bin/cache/flutter_tools.snapshot \
+                flutter/bin/cache/flutter_tools.stamp
+
           echo "$HOME/flutter/bin" >> $GITHUB_PATH
 
       - name: Verify the toolchain is actually arm64
         run: |
           set -euxo pipefail
-          flutter --version
-          # Fail fast and loudly: a wrong-arch Dart silently builds an x64 bundle.
+          # Check the binary BEFORE invoking flutter: if the swap failed, this
+          # names the cause instead of a confusing snapshot-mismatch error.
           file "$HOME/flutter/bin/cache/dart-sdk/bin/dart" | tee /dev/stderr | grep -q 'ARM aarch64'
+          "$HOME/flutter/bin/cache/dart-sdk/bin/dart" --version
+          flutter --version          # recompiles flutter_tools for arm64 here
           flutter precache --linux
           test -d "$HOME/flutter/bin/cache/artifacts/engine/linux-arm64-release" \
             || { echo "::error::linux-arm64 engine artifacts missing - wrong-arch Dart"; exit 1; }
