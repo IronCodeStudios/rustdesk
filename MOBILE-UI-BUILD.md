@@ -127,6 +127,60 @@ touch, desktop assumes pointer + keyboard. On a Linux phone you want touch.
 `models/server_model.dart` has only **2** — the connection-manager split is in
 the process-launching layer, not the model. Biggest de-risking fact we have.
 
+### FOUND AND FIXED — the window is created invisible
+
+First real bug, and it is not in the widget tree at all.
+
+`flutter/linux/my_application.cc:161` creates the window with
+`gtk_widget_set_opacity(GTK_WIDGET(window), 0)` and leaves Dart to reveal it
+once the first frame is ready. `runMainApp` does that as part of its window
+setup. `runMobileApp` never has, because Android and iOS have no window.
+
+So the mobile UI rendered perfectly into a window that was never made visible.
+The symptom is a taskbar entry, a blank preview, and nothing on screen, while
+the app reports `opacity=1.0 visible=true` at a correct size the entire time.
+Fixed in `_revealWindowForMobileUi` (opacity, title, show, focus) plus a
+`windowManager.ensureInitialized()` before dispatching, which previously only
+happened on the desktop branch.
+
+**Expect more of this class.** Anything `runMainApp` does that `runMobileApp`
+does not is a candidate, because the mobile path was written for a platform
+with no window manager, no tray and no multi-window.
+
+### Verifying on this rig — read before you trust a blank window
+
+Two environment traps cost an hour here. Both produce *exactly* the symptom of
+a real rendering bug.
+
+1. **WSLg windows never paint inside a RustDesk (or any nested remote)
+   session.** The window exists and is queryable; nothing composites. Be
+   physically at the machine for visual checks.
+2. **The WSLg compositor wedges after roughly 15 GUI launch/kill cycles.**
+   Every app then renders blank, including ones that rendered minutes earlier
+   from the same binary. `wsl --shutdown` fixes it in seconds.
+
+Trap 2 caused a **false negative on the fix above**: the correct fix was
+written, tested on an already-wedged compositor, judged a failure, and
+abandoned. Two wrong theories followed before the compositor was reset and the
+original fix turned out to work.
+
+**So: re-run the known-good case before trusting any new result.** If the
+desktop path has stopped rendering too, the rig is lying to you, not the code.
+Cheap to check, and skipping it is expensive.
+
+Screenshot automation is a dead end on this rig, all three routes: `PrintWindow`
+returns black on GPU-composited WSLg windows, Windows-side screen capture is
+blocked by AV (correctly - it reads as spyware), and WSLg's Weston does not
+export `wlr-screencopy` so `grim` cannot work. Verify non-visually instead:
+logging the built widget type plus a post-frame callback proved the dispatch
+worked and names the widget class. Note that only proves the framework
+completed a frame, **not** that anything was visible - that is precisely how
+the invisible-window bug hid.
+
+Always rebuild with `python3 ./build.py --flutter --hwcodec`. It assembles the
+bundle and produces the .deb; bare `flutter build linux --release` is not a
+substitute. Do not switch build methods mid-investigation.
+
 ### Known desktop-only paths that will need handling
 
 - Multi-window sessions — `runMultiWindow`, `main.dart:188`. Mobile uses in-app
@@ -399,21 +453,29 @@ videoconvert) is already upstream as `377547fa1`; nothing was lost.
 - [x] Fork synced to current upstream
 - [x] `build.py` arm64 bundle path fixed
 - [x] Shared code mapped (140 refs)
-- [x] Ryzen environment built — WSL2 trixie on F:, deps + Rust 1.75 in
-- [x] `forceMobileUi` flag implemented — 19 lines, 3 files, uncommitted
+- [x] Ryzen environment built — WSL2 trixie on F:, full toolchain
+- [x] `forceMobileUi` flag implemented — `ffbce51c2`
 - [x] Override audited for bypass — none; entry path needs no changes
-- [ ] Toolchain finished (Flutter 3.24.5 + vcpkg still installing on Ryzen)
-- [ ] `flutter analyze` clean
-- [ ] Mobile UI renders on x86_64 Linux
-- [ ] Input handling adapted for touch
+- [x] `flutter analyze` clean on the changed lines
+- [x] Full build green on x86_64 — `build.py --flutter --hwcodec`
+- [x] **Mobile UI renders on x86_64 Linux** — needed the invisible-window fix,
+      `6df61ecf1`
+- [ ] Input handling adapted for touch ← **next, and the bulk of the work**
 - [ ] arm64 Flutter SDK solved
 - [ ] Installs and runs on PinePhone Pro
 
-**Last updated 2026-09-20 by the Ryzen machine.** Next action here: finish the
-toolchain, `flutter analyze`, then a first `python3 ./build.py --flutter
---hwcodec` and run it with `RUSTDESK_MOBILE_UI=1` to see what the mobile tree
-does on a desktop Linux target.
+**Last updated 2026-09-20 by the Ryzen machine.**
 
-Nothing is required of the Mac or the phone yet. The arm64 Flutter SDK is still
-the open blocker for deployment and is still correctly scheduled last — it gates
-shipping, not development.
+The opt-in works end to end on x86_64: `RUSTDESK_MOBILE_UI=1` builds and
+renders `HomePage` (the mobile home) instead of `DesktopTabPage`, in a visible
+window, with the desktop path unchanged.
+
+Next here is the substance the plan always named: **43 of the 140 `isDesktop`
+refs are input handling**, and mobile assumes touch where desktop assumes
+pointer plus keyboard. Rendering is not the same as usable.
+
+Still nothing required of the Mac or the phone. The arm64 Flutter SDK remains
+the open blocker for deployment and is still correctly scheduled last — it
+gates shipping, not development. Worth noting for the Mac: visual QA is
+genuinely hard on the Ryzen rig (see the verification section), so the phone
+may end up being where the UI is really judged.
