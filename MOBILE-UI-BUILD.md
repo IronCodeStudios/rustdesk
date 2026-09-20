@@ -148,6 +148,28 @@ the process-launching layer, not the model. Biggest de-risking fact we have.
 thing on x86_64, where the official Flutter SDK works. arm64 is only needed for
 the binary that installs on the phone.
 
+### Getting the source — clone recursively
+
+`libs/hbb_common` is a **git submodule**. A plain `git clone` leaves it empty and
+the build dies well into the run, at the cargo step, with a message that names
+the workspace member rather than the submodule:
+
+```
+error: failed to load manifest for workspace member `libs/scrap`
+  ... failed to read `libs/hbb_common/Cargo.toml`
+  ... No such file or directory (os error 2)
+```
+
+So clone with `--recursive`, or repair an existing clone:
+
+```bash
+git submodule update --init --recursive
+```
+
+On a minimal rootfs also `apt install --no-install-recommends gettext-base`, or
+every `git submodule` call prints `gettext: not found` / `envsubst: not found`.
+Harmless, but it buries real output.
+
 ## Ryzen — primary (do the work here)
 
 **Environment built 2026-09-20.** Host is `megatron` (Ryzen 7 5700X, 8c/16t,
@@ -197,7 +219,8 @@ heredoc through `wsl.exe`.
 Editing the WSL tree from Windows tooling works fine over
 `\\wsl.localhost\rustdesk-dev\home\arthur\dev\rustdesk\...`.
 
-Deps are upstream's own `Dockerfile` list:
+Deps are upstream's own `Dockerfile` list, **plus autotools, which that list
+omits** — see below. Install both together:
 
 ```bash
 sudo apt update && sudo apt install --no-install-recommends -y \
@@ -205,8 +228,25 @@ sudo apt update && sudo apt install --no-install-recommends -y \
   libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev libasound2-dev libpulse-dev \
   make wget libssl-dev unzip zip libgstreamer1.0-dev \
   libgstreamer-plugins-base1.0-dev ca-certificates ninja-build cmake python3 \
-  pkg-config xz-utils
+  pkg-config xz-utils \
+  autoconf automake libtool autoconf-archive
 ```
+
+**Upstream's dependency list is incomplete: `mfx-dispatch` needs `autoconf`.**
+Without it `vcpkg install` dies partway with
+
+```
+CMake Error at scripts/cmake/vcpkg_configure_make.cmake:721 (message):
+  mfx-dispatch requires autoconf from the system package manager
+```
+
+which is easy to misread as a vcpkg problem rather than a missing apt package.
+It is worse than it looks, because vcpkg **stops at that point**, so `opus` —
+which comes after it in the order — is never built either, and `vcpkg list`
+then shows a plausible-looking set of packages with two quietly absent. Check
+for `opus` and `mfx-dispatch` by name before trusting a vcpkg run.
+
+This will hit the Mac container identically; same Debian base, same port.
 
 Note: upstream's Dockerfile compiles CMake 3.30.6 from source. Skip it —
 trixie ships 3.31.6. Confirmed 2026-09-20: trixie gives cmake 3.31.6,
