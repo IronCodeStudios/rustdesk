@@ -22,7 +22,9 @@ on:
 env:
   FLUTTER_VERSION: "3.24.5"
   DART_VERSION: "3.5.4"                                          # bundled with Flutter 3.24.5
-  FLUTTER_ENGINE: "a18df97ca57a249df5d8d68cd0820600223ce262"      # flutter/3.24.5 bin/internal/engine.version
+  # NOT "FLUTTER_ENGINE" - the Flutter tool reserves that name for the path to a
+  # local engine src/ directory, and will try to treat this revision as one.
+  FLUTTER_ENGINE_REV: "a18df97ca57a249df5d8d68cd0820600223ce262"   # flutter/3.24.5 bin/internal/engine.version
   RUST_VERSION: "1.75"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   FRB_VERSION: "1.80.1"
@@ -81,7 +83,7 @@ jobs:
 
           # Stamp it, or the next flutter invocation re-downloads the x64 SDK
           # over the top and silently undoes all of this.
-          echo "$FLUTTER_ENGINE" > flutter/bin/cache/engine-dart-sdk.stamp
+          echo "$FLUTTER_ENGINE_REV" > flutter/bin/cache/engine-dart-sdk.stamp
 
           # The tarball also ships flutter_tools.snapshot precompiled for x64.
           # An arm64 Dart VM refuses it outright:
