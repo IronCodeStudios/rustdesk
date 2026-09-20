@@ -374,6 +374,30 @@ like bugs:
 session from a phone to a peer, which the Ryzen machine cannot produce — no
 touch input, and WSLg has no phone. That test belongs on the PinePhone.
 
+### NOT A BUG — the Chat tab is blank with no active session
+
+Reported during testing on x86_64 and checked, because it looks like exactly
+the kind of thing the widened gate would break. It is not.
+
+`common/widgets/chat_page.dart` contains **zero** platform branches, so nothing
+in it can behave differently on Linux. Its whole content is
+`chatModel.messages[currentKey]?.chatMessages ?? []`, empty when no session is
+connected, and `readOnly` evaluates **true** with no clients —
+`clients.every(...)` is vacuously true on an empty list — which hides the input
+box. There is no empty-state placeholder in the file. Empty list plus hidden
+input plus no placeholder renders a blank container.
+
+**Android does the same thing with no connections.** Chat is per-connection and
+only has content during an active incoming session.
+
+The one Linux-specific thing in that widget, `workaroundFreezeLinuxMint()`, only
+wraps it in `ExcludeSemantics` (`common.dart:4102`) — accessibility semantics,
+not rendering.
+
+A "no conversations yet" placeholder would be an improvement, but it is shared
+code affecting Android and iOS too, so it does not belong in this fork's opt-in.
+Judge the Chat tab **during a live incoming session**, not at rest.
+
 ### Getting the source — clone recursively
 
 `libs/hbb_common` is a **git submodule**. A plain `git clone` leaves it empty and
