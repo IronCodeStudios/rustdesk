@@ -306,6 +306,74 @@ So the honest cost is: one line for the gate, a guarded dispatch, a decision
 about which page the CM process renders, and then testing that an incoming
 session prompts, authorises, and tears down. Not a rewrite.
 
+#### Confirmed from the Ryzen machine, with one refinement
+
+Both Rust-side claims check out against the tree:
+`#[cfg(not(any(target_os = "android", target_os = "ios")))]` sits directly above
+`start_ipc` at `src/server/connection.rs:6267`, with `vec!["--cm"]` at 6287.
+
+The refinement is on the **environment** half, and it makes the compile-time
+build the more reliable trigger rather than the env var:
+
+`sudo -E` is **not** unconditional. `SUDO_E_PRESERVES_ENV`
+(`src/platform/linux.rs:112`) is a runtime probe — it injects a sentinel
+variable, runs `sudo -n -E env`, and checks whether the sentinel survives,
+because on some distros `-E` succeeds while silently ignoring the request
+(upstream issue 13705, Ubuntu 25.10). `-E` is only inserted at line 1429 when
+that probe passes, and there is a separate fallback path when it does not.
+
+So `RUSTDESK_MOBILE_UI=1` reaching the `--cm` child is **distro-dependent**.
+A `--dart-define` build has no such conditionality: the flag is compiled in, so
+the CM subprocess takes the mobile branch every time, everywhere.
+
+Two consequences for whoever does this work:
+
+- **Do not use the env var to test the fix.** A machine where the probe fails
+  will look fixed while the compile-time build is still broken. Test the
+  `--dart-define` build, which is the phone package anyway.
+- The guarded dispatch must key on **argument shape**, not on how the override
+  was supplied, exactly as proposed above. Suppressing the env var for the child
+  would not help the compiled build.
+
+### Input handling — audited, 36 of 37 refs already correct
+
+Done on the Ryzen machine 2026-09-20, against the tree.
+
+The plan budgeted this as the bulk of the work. It is not, because those
+`isDesktop` call sites already meant *"use the desktop UI"* — which is exactly
+what the opt-in redefines.
+
+| File | refs | verdict |
+|---|---|---|
+| `relative_mouse_model.dart` | 10 | correct as-is |
+| `toolbar.dart` | 10 | correct as-is |
+| `remote_input.dart` | 7 | correct as-is |
+| `input_model.dart` | 10 | one real bug, fixed |
+
+**The bug:** the mobile keyboard path routes non-iOS through a workaround for
+Android soft keyboards, which report unreliable `physicalKey.usbHidUsage`. A
+Linux build is `isMobile` but not `isIOS`, so it fell into that branch — and the
+workaround deliberately drops **Backspace and Enter** out of map mode. Every
+other key stayed in it, so the symptom is an inconsistent keyboard rather than a
+dead one. GTK reports correct HID usages, like iOS, so Linux now takes the iOS
+branch.
+
+**Deliberately not changed, and worth knowing why**, because the first two look
+like bugs:
+
+- `relative_mouse_model.dart:192` disables relative mouse mode on Linux/Wayland,
+  and the opt-in skips that guard. That is **correct**. The guard exists because
+  the *desktop* implementation warps the local cursor, which Wayland forbids.
+  Mobile never warps — `sendMobileRelativeMouseMove` reads deltas from the
+  floating widget — so the feature genuinely should be available on a Wayland
+  phone. This was nearly "fixed" into a regression.
+- `toolbar.dart:1179` hides the relative-mouse toggle under the opt-in. Also
+  correct: the code comment says mobile puts that option in `GestureHelp`.
+
+**Compile-verified only.** Confirming keyboard mapping end to end needs a real
+session from a phone to a peer, which the Ryzen machine cannot produce — no
+touch input, and WSLg has no phone. That test belongs on the PinePhone.
+
 ### Getting the source — clone recursively
 
 `libs/hbb_common` is a **git submodule**. A plain `git clone` leaves it empty and
@@ -564,7 +632,7 @@ videoconvert) is already upstream as `377547fa1`; nothing was lost.
 - [x] Full build green on x86_64 — `build.py --flutter --hwcodec`
 - [x] **Mobile UI renders on x86_64 Linux** — needed the invisible-window fix,
       `6df61ecf1`
-- [ ] Input handling adapted for touch ← **next, and the bulk of the work**
+- [x] Input handling audited — 36/37 refs already correct; one keyboard bug fixed
 - [ ] arm64 Flutter SDK solved
 - [ ] Installs and runs on PinePhone Pro
 
