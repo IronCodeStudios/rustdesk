@@ -866,7 +866,12 @@ class InputModel {
       // Do not use map mode if mobile -> Android. Android does not support map mode for now.
       // Because simulating the physical key events(uhid) which requires root permission is not supported.
       if (peerPlatform != kPeerPlatformAndroid) {
-        if (isIOS) {
+        // isLinux here means a Linux build rendering the mobile UI (see
+        // forceMobileUi) - a Linux phone. Its GTK key events carry correct USB
+        // HID usages, like iOS, so the Android soft-keyboard workaround below
+        // must not apply: it would drop Backspace and Enter out of map mode for
+        // no reason while every other key stayed in it.
+        if (isIOS || isLinux) {
           isMobileAndMapMode = true;
         } else {
           // The physicalKey.usbHidUsage may be not correct for soft keyboard on Android.
