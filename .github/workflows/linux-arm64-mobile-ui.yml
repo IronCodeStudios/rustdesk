@@ -205,7 +205,14 @@ jobs:
           echo "path=$deb" >> $GITHUB_OUTPUT
           echo "Using: $deb"
           dpkg-deb -I "$deb"
-          dpkg-deb -c "$deb" | grep -E 'libflutter_linux_gtk|flutter_assets' | head -3
+          # NOT `dpkg-deb -c ... | grep ... | head`: head closes the pipe, dpkg-deb
+          # takes SIGPIPE, and `set -o pipefail` turns that into a fatal exit 2.
+          # A diagnostic line must not be able to fail the job.
+          dpkg-deb -c "$deb" > /tmp/deb-contents.txt
+          echo "--- flutter runtime in the package ---"
+          grep -E 'libflutter_linux_gtk|flutter_assets|bin/rustdesk' /tmp/deb-contents.txt \
+            | head -5 || true
+          echo "--- entries: $(wc -l < /tmp/deb-contents.txt) ---"
 
       - uses: actions/upload-artifact@v4
         with:
