@@ -140,11 +140,18 @@ jobs:
         run: |
           set -euxo pipefail
           "$VCPKG_ROOT"/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
-          # vcpkg can stop early and still look successful, so check by name.
-          # (mfx-dispatch is x86-only per vcpkg.json, so it is absent here by design.)
-          for p in libvpx libyuv opus aom; do
-            "$VCPKG_ROOT"/vcpkg list | grep -q "^$p" \
-              || { echo "::error::vcpkg did not build $p"; exit 1; }
+
+          # vcpkg can stop early and still exit cleanly, so verify. Check the
+          # install tree directly rather than `vcpkg list`: list reports the
+          # DEFAULT install root and we used --x-install-root, so it reports
+          # nothing and a name check false-fails on a perfectly good build.
+          # (mfx-dispatch is x86-only per vcpkg.json - absent here by design.)
+          root="$VCPKG_ROOT/installed/arm64-linux"
+          echo "--- installed tree ---"
+          ls -1 "$root/lib" || true
+          for lib in libvpx.a libyuv.a libopus.a libaom.a; do
+            test -f "$root/lib/$lib" \
+              || { echo "::error::vcpkg did not produce $lib"; exit 1; }
           done
 
       - name: Generate the flutter_rust_bridge sources
