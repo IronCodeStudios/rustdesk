@@ -49,6 +49,17 @@ def get_deb_extra_depends() -> str:
         return ", libatomic1"
     return ""
 
+def flutter_build_linux_cmd() -> str:
+    """`flutter build linux --release`, plus anything FLUTTER_BUILD_EXTRA_ARGS adds.
+
+    Lets a packager pass --dart-define=... without editing this file; used to
+    produce the Linux-phone package (RUSTDESK_FORCE_MOBILE_UI). Empty by
+    default, so the normal build is byte-for-byte unchanged.
+    """
+    extra = os.environ.get("FLUTTER_BUILD_EXTRA_ARGS", "").strip()
+    return 'flutter build linux --release' + (f' {extra}' if extra else '')
+
+
 def system2(cmd):
     exit_code = os.system(cmd)
     if exit_code != 0:
@@ -702,7 +713,7 @@ def build_flutter_deb(version, features):
         system2(f'cargo build --locked --features {features} --lib --release')
         ffi_bindgen_function_refactor()
     os.chdir('flutter')
-    system2('flutter build linux --release')
+    system2(flutter_build_linux_cmd())
     system2('mkdir -p tmpdeb/usr/bin/')
     system2('mkdir -p tmpdeb/usr/share/rustdesk')
     system2('mkdir -p tmpdeb/usr/share/rustdesk/files/systemd/')
@@ -921,7 +932,7 @@ def build_flutter_arch_manjaro(version, features):
         system2(f'cargo build --locked --features {features} --lib --release')
     ffi_bindgen_function_refactor()
     os.chdir('flutter')
-    system2('flutter build linux --release')
+    system2(flutter_build_linux_cmd())
     system2(f'strip {flutter_build_dir}/lib/librustdesk.so')
     os.chdir('../res')
     system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')

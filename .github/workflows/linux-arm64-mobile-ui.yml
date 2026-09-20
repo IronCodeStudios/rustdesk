@@ -1,0 +1,166 @@
+# Builds an aarch64 Linux .deb, optionally with the mobile UI compiled in,
+# for Linux phones (PinePhone Pro, Librem 5, postmarketOS).
+#
+# Why this exists: Flutter ships no arm64 Linux SDK, so neither the x86 dev box
+# nor an 8 GB M1 can produce a phone package conveniently. But Flutter *does*
+# publish arm64 Linux ENGINE artifacts, and Dart publishes an arm64 Linux SDK
+# separately - so the x64 SDK tarball plus a swapped dart-sdk builds arm64
+# natively on an arm64 runner. Same trick upstream already uses for Windows
+# arm64 in flutter-build.yml.
+name: linux-arm64-mobile-ui
+
+on:
+  workflow_dispatch:
+    inputs:
+      mobile_ui:
+        description: "Compile the mobile UI in (RUSTDESK_FORCE_MOBILE_UI)"
+        type: boolean
+        default: true
+  push:
+    branches: [feat/mobile-ui-on-linux]
+
+env:
+  FLUTTER_VERSION: "3.24.5"
+  DART_VERSION: "3.5.4"                                          # bundled with Flutter 3.24.5
+  FLUTTER_ENGINE: "a18df97ca57a249df5d8d68cd0820600223ce262"      # flutter/3.24.5 bin/internal/engine.version
+  RUST_VERSION: "1.75"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  FRB_VERSION: "1.80.1"
+  CARGO_EXPAND_VERSION: "1.0.95"
+  VCPKG_FORCE_SYSTEM_BINARIES: "1"                               # required on arm64: vcpkg ships no arm64 cmake/ninja
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 180
+
+    steps:
+      - name: Check out with submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive        # libs/hbb_common is a submodule; without this
+                                       # cargo dies late with "failed to load manifest
+                                       # for workspace member libs/scrap"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            g++ gcc git curl nasm yasm libgtk-3-dev clang libxcb-randr0-dev \
+            libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libasound2-dev libpulse-dev make wget libssl-dev unzip zip \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            ca-certificates ninja-build cmake python3 pkg-config xz-utils \
+            autoconf automake libtool autoconf-archive gettext-base file
+          # autotools are NOT in upstream's Dockerfile list. Without them vcpkg
+          # stops partway at mfx-dispatch and silently never builds opus.
+          # gettext-base only quiets "envsubst: not found" from git submodule.
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+            --default-toolchain ${{ env.RUST_VERSION }} --component rustfmt
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+          # rustfmt is REQUIRED: flutter_rust_bridge_codegen shells out to it and
+          # dies on non-zero exit, after leaving a complete-looking
+          # bridge_generated.rs but no Dart side at all.
+
+      - name: Install Flutter ${{ env.FLUTTER_VERSION }} with an arm64 Dart SDK
+        run: |
+          set -euxo pipefail
+          cd "$HOME"
+          # The SDK tarball is x64-only, but it is mostly the tool itself.
+          curl -fLO "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+          tar xf "flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+
+          # Swap the bundled x64 dart-sdk for the arm64 one Dart publishes.
+          curl -fLO "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-arm64-release.zip"
+          rm -rf flutter/bin/cache/dart-sdk
+          unzip -q dartsdk-linux-arm64-release.zip -d flutter/bin/cache/
+          # The zip contains dart-sdk/, so it lands at the right path already.
+
+          # Stamp it, or the next flutter invocation re-downloads the x64 SDK
+          # over the top and silently undoes all of this.
+          echo "$FLUTTER_ENGINE" > flutter/bin/cache/engine-dart-sdk.stamp
+
+          echo "$HOME/flutter/bin" >> $GITHUB_PATH
+
+      - name: Verify the toolchain is actually arm64
+        run: |
+          set -euxo pipefail
+          flutter --version
+          # Fail fast and loudly: a wrong-arch Dart silently builds an x64 bundle.
+          file "$HOME/flutter/bin/cache/dart-sdk/bin/dart" | tee /dev/stderr | grep -q 'ARM aarch64'
+          flutter precache --linux
+          test -d "$HOME/flutter/bin/cache/artifacts/engine/linux-arm64-release" \
+            || { echo "::error::linux-arm64 engine artifacts missing - wrong-arch Dart"; exit 1; }
+
+      - name: Set up vcpkg
+        run: |
+          set -euxo pipefail
+          git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
+          git -C "$HOME/vcpkg" checkout "$VCPKG_COMMIT_ID"
+          "$HOME/vcpkg"/bootstrap-vcpkg.sh -disableMetrics
+          echo "VCPKG_ROOT=$HOME/vcpkg" >> $GITHUB_ENV
+
+      - name: Build vcpkg dependencies
+        run: |
+          set -euxo pipefail
+          "$VCPKG_ROOT"/vcpkg install --x-install-root="$VCPKG_ROOT/installed"
+          # vcpkg can stop early and still look successful, so check by name.
+          # (mfx-dispatch is x86-only per vcpkg.json, so it is absent here by design.)
+          for p in libvpx libyuv opus aom; do
+            "$VCPKG_ROOT"/vcpkg list | grep -q "^$p" \
+              || { echo "::error::vcpkg did not build $p"; exit 1; }
+          done
+
+      - name: Generate the flutter_rust_bridge sources
+        run: |
+          set -euxo pipefail
+          # build.py does NOT do this. Upstream generates them in a separate
+          # workflow (bridge.yml) and downloads the artifact. Without it the
+          # build fails with one real error (missing module bridge_generated)
+          # and four misleading IntoIntoDart trait errors.
+          cargo install cargo-expand --version "$CARGO_EXPAND_VERSION" --locked
+          cargo install flutter_rust_bridge_codegen --version "$FRB_VERSION" --features uuid --locked
+          (cd flutter && flutter pub get)
+          flutter_rust_bridge_codegen \
+            --rust-input ./src/flutter_ffi.rs \
+            --dart-output ./flutter/lib/generated_bridge.dart \
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          test -s ./flutter/lib/generated_bridge.dart \
+            || { echo "::error::codegen wrote no Dart output"; exit 1; }
+
+      - name: Build
+        env:
+          DEB_ARCH: arm64
+          FLUTTER_BUILD_EXTRA_ARGS: >-
+            ${{ (github.event_name == 'push' || inputs.mobile_ui)
+                && '--dart-define=RUSTDESK_FORCE_MOBILE_UI=true' || '' }}
+        run: |
+          set -euxo pipefail
+          # Compile-time define, not RUSTDESK_MOBILE_UI=1: the env var reaches the
+          # spawned --cm child only where `sudo -E` actually preserves the
+          # environment, which is distro-dependent (SUDO_E_PRESERVES_ENV).
+          python3 ./build.py --flutter --hwcodec
+
+      - name: Collect the package
+        id: deb
+        run: |
+          set -euxo pipefail
+          # build.py chdir's into flutter/ (build.py:715) and never returns, so
+          # `dpkg-deb -b tmpdeb rustdesk.deb` writes flutter/rustdesk.deb - NOT
+          # the repo root. Search rather than assume.
+          deb=$(find . -maxdepth 3 -name '*.deb' -newermt '-6 hours' | head -1)
+          test -n "$deb" || { echo "::error::no .deb produced"; exit 1; }
+          echo "path=$deb" >> $GITHUB_OUTPUT
+          echo "Found: $deb"
+          dpkg-deb -I "$deb"
+          dpkg-deb -c "$deb" | grep -E 'libflutter_linux_gtk|flutter_assets' | head -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-aarch64${{ (github.event_name == 'push' || inputs.mobile_ui) && '-mobile-ui' || '' }}
+          path: ${{ steps.deb.outputs.path }}
+          if-no-files-found: error
+          retention-days: 14
