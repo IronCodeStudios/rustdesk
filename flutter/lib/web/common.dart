@@ -12,6 +12,10 @@ final isWebDesktop_ = !js.context.callMethod('isMobile');
 
 final isDesktop_ = false;
 
+// Web never opts into the mobile-UI override: it has its own mobile detection
+// via isWebDesktop_, and dart:io is not available here.
+final forceMobileUi_ = false;
+
 final _localOs = js.context.callMethod('getByName', ['local_os', '']);
 final isWebOnWindows_ = _localOs == kPeerPlatformWindows;
 final isWebOnLinux_ = _localOs == kPeerPlatformLinux;

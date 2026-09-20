@@ -55,13 +55,16 @@ final isIOS = isIOS_;
 final isWindows = isWindows_;
 final isMacOS = isMacOS_;
 final isLinux = isLinux_;
-final isDesktop = isDesktop_;
+// isDesktop_ stays "this OS is a desktop OS" — still true on a Linux phone.
+// isDesktop means "use the desktop UI", which the override can turn off.
+final forceMobileUi = forceMobileUi_;
+final isDesktop = isDesktop_ && !forceMobileUi;
 final isWeb = isWeb_;
 final isWebDesktop = isWebDesktop_;
 final isWebOnWindows = isWebOnWindows_;
 final isWebOnLinux = isWebOnLinux_;
 final isWebOnMacOs = isWebOnMacOS_;
-var isMobile = isAndroid || isIOS;
+var isMobile = isAndroid || isIOS || forceMobileUi;
 var version = '';
 int androidVersion = 0;
 
