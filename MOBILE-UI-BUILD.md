@@ -181,6 +181,42 @@ Always rebuild with `python3 ./build.py --flutter --hwcodec`. It assembles the
 bundle and produces the .deb; bare `flutter build linux --release` is not a
 substitute. Do not switch build methods mid-investigation.
 
+### What actually renders — and what is missing from it
+
+Confirmed visually on x86_64, 2026-09-20. The real mobile tree: centred blue
+`AppBar`, the mobile peer-tab row (recent, favourites, discovered, address
+book, group), search and view-mode actions, mobile empty state, bottom
+navigation. No desktop tab strip anywhere.
+
+The window is 800x600 because that is the desktop default, so the layout looks
+stretched. Not a bug; on a phone it takes the screen in portrait.
+
+**The bottom nav has exactly two items: Connection and Settings.** That is
+`initPages()` behaving correctly, and it is also a functional gap:
+
+```dart
+if (isAndroid && !bind.isOutgoingOnly()) {
+  _chatPageTabIndex = _pages.length;
+  _pages.addAll([ChatPage(type: ChatPageType.mobileMain), ServerPage()]);
+}
+```
+
+`ServerPage` is what lets a mobile device *accept* incoming connections, and
+`ChatPage` goes with it. Both are `isAndroid`-gated, so **a Linux phone using
+this opt-in is outgoing-only** — it can control other machines, but nothing can
+connect to it.
+
+Whether that matters is a product decision, not a code one. If the phone only
+ever needs to be a controller, leave it. If it must also be a target, widening
+that gate to `isAndroid || forceMobileUi` is the obvious first move, but it
+pulls in the connection-manager problem below: mobile handles incoming
+in-process, desktop runs it as a separate `--cm` process. That is the harder
+half and should be costed before starting.
+
+Worth noting `models/server_model.dart` has only **2** `isDesktop` refs, so the
+model layer is mostly platform-neutral and the split really does live in the
+process-launching layer.
+
 ### Known desktop-only paths that will need handling
 
 - Multi-window sessions — `runMultiWindow`, `main.dart:188`. Mobile uses in-app
