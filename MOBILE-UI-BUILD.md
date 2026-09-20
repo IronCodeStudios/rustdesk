@@ -170,6 +170,50 @@ On a minimal rootfs also `apt install --no-install-recommends gettext-base`, or
 every `git submodule` call prints `gettext: not found` / `envsubst: not found`.
 Harmless, but it buries real output.
 
+### The bridge is generated, and `build.py` does not generate it
+
+**This is the one that will cost the most time if you do not know it.**
+
+`src/bridge_generated.rs` and `flutter/lib/generated_bridge.dart` are **not in
+the repo**. Upstream produces them in a *separate* CI workflow, `bridge.yml`,
+uploads them as an artifact, and `flutter-build.yml` downloads that artifact
+before building. So `build.py` never runs codegen, and a local build from a
+fresh clone cannot succeed until you run it yourself.
+
+What it looks like when you have not: one real error and four red herrings.
+
+```
+error[E0583]: file not found for module `bridge_generated`
+error[E0277]: the trait bound `EventToUI: IntoIntoDart<_>` is not satisfied   (x4)
+```
+
+The four trait errors read like a Rust or flutter_rust_bridge version mismatch.
+They are not — `EventToUI`'s `IntoIntoDart` impl simply lives in the file that
+was never generated. Fix the first error and the other four disappear.
+
+The recipe, with `bridge.yml`'s pins:
+
+```bash
+rustup component add rustfmt          # see below
+cargo install cargo-expand --version 1.0.95 --locked
+cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+pushd flutter && flutter pub get && popd
+~/.cargo/bin/flutter_rust_bridge_codegen \
+  --rust-input ./src/flutter_ffi.rs \
+  --dart-output ./flutter/lib/generated_bridge.dart \
+  --c-output ./flutter/macos/Runner/bridge_generated.h
+```
+
+**`rustfmt` is required, and `rustup ... --profile minimal` does not install
+it.** Codegen writes `bridge_generated.rs`, then shells out to `rustfmt` to
+format it, and dies on a non-zero exit. The partial run is the trap: it leaves a
+complete-looking 125 KB `bridge_generated.rs` behind while never writing the
+Dart side at all, so a re-run that checks only for the Rust file will conclude
+codegen already succeeded.
+
+Codegen also runs Dart's `build_runner` for the freezed classes, so it takes a
+few minutes and needs `flutter pub get` to have run first.
+
 ## Ryzen — primary (do the work here)
 
 **Environment built 2026-09-20.** Host is `megatron` (Ryzen 7 5700X, 8c/16t,
