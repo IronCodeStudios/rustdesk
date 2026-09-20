@@ -190,11 +190,20 @@ jobs:
           set -euxo pipefail
           # build.py chdir's into flutter/ (build.py:715) and never returns, so
           # `dpkg-deb -b tmpdeb rustdesk.deb` writes flutter/rustdesk.deb - NOT
-          # the repo root. Search rather than assume.
-          deb=$(find . -maxdepth 3 -name '*.deb' -newermt '-6 hours' | head -1)
-          test -n "$deb" || { echo "::error::no .deb produced"; exit 1; }
+          # the repo root. Search, and show the search, so a miss is diagnosable
+          # from the log instead of costing another run. No -maxdepth and no
+          # -newermt: both are assumptions, and both have already cost a run.
+          echo "--- every .deb in the tree ---"
+          find . -name '*.deb' -not -path './.git/*' -printf '%p  %s bytes\n' || true
+          echo "--- flutter/ ---"
+          ls -la flutter/*.deb flutter/ 2>/dev/null | head -20 || true
+          echo "--- target/release/bundle/ ---"
+          ls -laR target/release/bundle 2>/dev/null | head -20 || true
+
+          deb=$(find . -name '*.deb' -not -path './.git/*' | head -1)
+          test -n "$deb" || { echo "::error::no .deb produced - see listings above"; exit 1; }
           echo "path=$deb" >> $GITHUB_OUTPUT
-          echo "Found: $deb"
+          echo "Using: $deb"
           dpkg-deb -I "$deb"
           dpkg-deb -c "$deb" | grep -E 'libflutter_linux_gtk|flutter_assets' | head -3
 
