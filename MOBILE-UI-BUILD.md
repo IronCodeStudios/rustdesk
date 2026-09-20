@@ -45,6 +45,68 @@ Every one of the **140** `isDesktop` references in shared code
 Opt-in, so existing desktop users see no change. That is the whole argument for
 upstream merge.
 
+### IMPLEMENTED 2026-09-20 (Ryzen) — 19 lines, 3 files
+
+The flag lives in the **conditional-import pair**, not in `common.dart`, because
+that is the existing seam for "this value depends on the platform":
+`native/common.dart` has `dart:io`, `web/common.dart` does not.
+
+`flutter/lib/native/common.dart`:
+
+```dart
+const _kForceMobileUiDefine =
+    bool.fromEnvironment('RUSTDESK_FORCE_MOBILE_UI', defaultValue: false);
+final forceMobileUi_ = Platform.isLinux &&
+    (_kForceMobileUiDefine ||
+        Platform.environment['RUSTDESK_MOBILE_UI'] == '1');
+```
+
+`flutter/lib/web/common.dart`: `final forceMobileUi_ = false;`
+
+`flutter/lib/common.dart:58,64`:
+
+```dart
+final forceMobileUi = forceMobileUi_;
+final isDesktop = isDesktop_ && !forceMobileUi;
+var isMobile = isAndroid || isIOS || forceMobileUi;
+```
+
+**Two ways to turn it on**, so one binary serves both cases:
+
+| Mechanism | Use |
+|---|---|
+| `RUSTDESK_MOBILE_UI=1` env var | runtime, flip it on any build without rebuilding |
+| `--dart-define=RUSTDESK_FORCE_MOBILE_UI=true` | compile-time, for a dedicated phone package |
+
+Guarded by `Platform.isLinux`, so a stray env var cannot flip a Windows or macOS
+user into the mobile UI.
+
+**`isDesktop_` deliberately keeps its old meaning** — "this OS is a desktop OS",
+still true on a PinePhone. Only `isDesktop` ("use the desktop UI") changes. Code
+that legitimately needs the OS family is therefore untouched by the opt-in.
+
+### Audit results — the override cannot be bypassed
+
+Checked on the real tree, not assumed:
+
+- **`isDesktop_` is referenced in exactly one place** outside its two
+  definitions: `common.dart:58`. Nothing reaches around the override.
+- **`isMobile` is never reassigned anywhere.** It is declared `var`, but the
+  mutability is vestigial — the only assignment is its initialiser.
+- **`runMobileApp()` (`main.dart:176`) is already platform-neutral.** Its only
+  Android-specific calls, `androidChannelInit()` and
+  `syncAndroidServiceAppDirConfigPath()`, are *already* wrapped in
+  `if (isAndroid)`. Everything else it touches — `initEnv`, `checkUpdate`,
+  `draggablePositions`, the `gFFI` models, `runApp(App())`, `initUniLinks` — is
+  shared code. **The entry path needs no changes at all.**
+- **`mobile/` contains zero `MethodChannel`, Android-intent or permission
+  calls.** The Android plumbing lives in `common/` and `native/` behind guards.
+  Only 31 `isAndroid`/`isIOS` refs across 8 files in `mobile/`, all conditionals
+  that take the else branch on Linux.
+
+Net: the mobile tree is markedly less Android-coupled than this plan assumed.
+The remaining work is where the plan already said it was — input handling.
+
 ### Where the real work is
 
 Ranked by `isDesktop` density in shared code:
@@ -88,7 +150,54 @@ the binary that installs on the phone.
 
 ## Ryzen — primary (do the work here)
 
-WSL2 Debian trixie, or a VM. Deps are upstream's own `Dockerfile` list:
+**Environment built 2026-09-20.** Host is `megatron` (Ryzen 7 5700X, 8c/16t,
+63.9 GB). WSL2 2.7.14.0, kernel 6.18.33.2, distro `rustdesk-dev`, repo at
+`/home/arthur/dev/rustdesk`.
+
+Four things about this setup are not obvious and cost time:
+
+**1. Do not use the Store's Debian — it is bookworm (12), not trixie (13).**
+The phone runs trixie, and the whole point of matching Debian versions is ABI
+parity with the target. Import a trixie rootfs instead:
+
+```bash
+# from Windows
+curl -o rootfs.tar.xz https://images.linuxcontainers.org/images/debian/trixie/amd64/default/<build>/rootfs.tar.xz
+wsl --import rustdesk-dev F:\wsl\rustdesk-dev F:\wsl\images\rootfs.tar.xz --version 2
+```
+
+**2. Put the distro on the big drive.** `wsl --import` takes the target path, so
+point it at whichever disk has room. A vcpkg tree that builds aom, libvpx and
+ffmpeg from source plus a Rust `target/` will not fit in a typical C: remainder.
+This machine: C: had 65 GB free, F: had 606 GB, so the distro lives on F:.
+
+**3. WSL only gets half the host RAM by default**, which would be 32 GB here —
+under the 64 GB the "stock `lto = true` links fine" note assumes. Set it
+explicitly in `%USERPROFILE%\.wslconfig`, then `wsl --shutdown`:
+
+```ini
+[wsl2]
+memory=48GB
+processors=16
+swap=8GB
+```
+
+**4. A backgrounded process dies when the `wsl.exe` handle closes.** `nohup`,
+`setsid` and `disown` do not save it — a 693 MB Flutter download was reaped this
+way. Long jobs must run in the foreground of a `wsl.exe` invocation that stays
+alive for their duration.
+
+Two more, if you drive WSL from Git Bash rather than PowerShell: an unquoted
+`/home/...` argument gets path-translated into `C:/Program Files/Git/home/...`
+(use `MSYS_NO_PATHCONV=1`, or keep the command inside `bash -c '...'`), and a
+`<<"EOF"` heredoc loses its quoting in transit, so `$VAR` and `$(cmd)` expand on
+the *Windows* side. Write scripts to a file and copy them in; do not pipe a
+heredoc through `wsl.exe`.
+
+Editing the WSL tree from Windows tooling works fine over
+`\\wsl.localhost\rustdesk-dev\home\arthur\dev\rustdesk\...`.
+
+Deps are upstream's own `Dockerfile` list:
 
 ```bash
 sudo apt update && sudo apt install --no-install-recommends -y \
@@ -100,7 +209,11 @@ sudo apt update && sudo apt install --no-install-recommends -y \
 ```
 
 Note: upstream's Dockerfile compiles CMake 3.30.6 from source. Skip it —
-trixie ships 3.31.6.
+trixie ships 3.31.6. Confirmed 2026-09-20: trixie gives cmake 3.31.6,
+gcc 14.2.0, clang 19.1.7, python 3.13.5, git 2.47.3, ninja 1.12.1.
+
+On a minimal container rootfs this list pulls a large GTK/GStreamer dependency
+chain and takes a while. That is expected, not a hang.
 
 Versions pinned by upstream CI (`.github/workflows/flutter-build.yml`):
 
@@ -202,9 +315,21 @@ videoconvert) is already upstream as `377547fa1`; nothing was lost.
 - [x] Fork synced to current upstream
 - [x] `build.py` arm64 bundle path fixed
 - [x] Shared code mapped (140 refs)
-- [ ] Ryzen environment built
-- [ ] `_forceMobileUi` flag implemented
+- [x] Ryzen environment built — WSL2 trixie on F:, deps + Rust 1.75 in
+- [x] `forceMobileUi` flag implemented — 19 lines, 3 files, uncommitted
+- [x] Override audited for bypass — none; entry path needs no changes
+- [ ] Toolchain finished (Flutter 3.24.5 + vcpkg still installing on Ryzen)
+- [ ] `flutter analyze` clean
 - [ ] Mobile UI renders on x86_64 Linux
 - [ ] Input handling adapted for touch
 - [ ] arm64 Flutter SDK solved
 - [ ] Installs and runs on PinePhone Pro
+
+**Last updated 2026-09-20 by the Ryzen machine.** Next action here: finish the
+toolchain, `flutter analyze`, then a first `python3 ./build.py --flutter
+--hwcodec` and run it with `RUSTDESK_MOBILE_UI=1` to see what the mobile tree
+does on a desktop Linux target.
+
+Nothing is required of the Mac or the phone yet. The arm64 Flutter SDK is still
+the open blocker for deployment and is still correctly scheduled last — it gates
+shipping, not development.
