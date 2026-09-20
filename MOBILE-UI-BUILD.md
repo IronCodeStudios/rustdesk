@@ -238,6 +238,74 @@ process-launching layer.
 thing on x86_64, where the official Flutter SDK works. arm64 is only needed for
 the binary that installs on the phone.
 
+### DECIDED — both directions. Read this before widening the gate.
+
+Arthur decided 2026-09-20: the phone must **accept** incoming connections, not
+just make them. So the `isAndroid` gate at `mobile/pages/home_page.dart:55` does
+need widening to `isAndroid || forceMobileUi`.
+
+**That one-line change is not the work. This is.**
+
+#### The dispatch order makes `--cm` unreachable under the opt-in
+
+Reviewed from the phone, 2026-09-20. Three facts that only bite together:
+
+1. `main.dart:45` takes the mobile path **before any argument is inspected**:
+
+   ```dart
+   if (!isDesktop) { ... runMobileApp(); return; }
+   ```
+
+2. `--cm` is handled at `main.dart:108`, *inside* the `isDesktop` branch — so
+   it is unreachable whenever `forceMobileUi` is on.
+
+3. Linux still spawns that process. `start_ipc`
+   (`src/server/connection.rs:6287`) shells out to `--cm`, and it is gated
+   `#[cfg(not(any(target_os = "android", target_os = "ios")))]` — compiled in
+   and live on Linux. Android never had it, which is why the mobile UI never
+   had to care.
+
+And the environment carries over: `run_as_user` (`src/platform/linux.rs:1404`)
+spawns via `sudo -E`, commented *"-E is required to preserve env"*. So
+`RUSTDESK_MOBILE_UI=1` is inherited by the child.
+
+**Net effect once incoming is enabled:** a peer connects, the Rust side spawns
+`--cm`, that process reads the inherited env var, takes the mobile branch and
+renders a **second mobile home window**. No connection manager appears, so the
+prompt to accept or reject the session never shows. The compile-time
+`--dart-define` build has the same fault, with no env var involved.
+
+This is latent right now only because nothing can connect in.
+
+#### Fix shape
+
+The special-argument forms — `--cm`, `multi_window`, `--install` — are
+*process roles*, not UI preferences, and must win over the override. Guard the
+mobile dispatch on argument shape rather than moving it:
+
+```dart
+if (!isDesktop && !_isDesktopRoleArgs(args)) {
+  ...
+  runMobileApp();
+  return;
+}
+```
+
+Then decide the CM's own UI separately: reuse `DesktopServerPage` in that
+subprocess (cheapest, and it is a small transient window), or render the mobile
+`ServerPage` there.
+
+#### What is genuinely shared
+
+`DesktopServerPage` and the mobile `ServerPage` both drive the **same**
+`gFFI.serverModel` — the only difference is which process hosts the widget.
+That is why `server_model.dart` carries just 2 `isDesktop` refs. The model layer
+is not the problem; process topology is.
+
+So the honest cost is: one line for the gate, a guarded dispatch, a decision
+about which page the CM process renders, and then testing that an incoming
+session prompts, authorises, and tears down. Not a rewrite.
+
 ### Getting the source — clone recursively
 
 `libs/hbb_common` is a **git submodule**. A plain `git clone` leaves it empty and
