@@ -43,6 +43,12 @@ Future<void> main(List<String> args) async {
   kBootArgs = List.from(args);
 
   if (!isDesktop) {
+    // A Linux build rendering the mobile UI still owns a real desktop window,
+    // unlike Android and iOS. window_manager has to be initialised here so
+    // runMobileApp can reveal it; see _revealWindowForMobileUi.
+    if (forceMobileUi) {
+      await windowManager.ensureInitialized();
+    }
     runMobileApp();
     return;
   }
@@ -182,7 +188,27 @@ void runMobileApp() async {
   await Future.wait([gFFI.abModel.loadCache(), gFFI.groupModel.loadCache()]);
   gFFI.userModel.refreshCurrentUser();
   runApp(App());
+  if (forceMobileUi) await _revealWindowForMobileUi();
   await initUniLinks();
+}
+
+// The GTK runner creates the window with opacity 0 and relies on Dart to
+// reveal it once the first frame is ready (flutter/linux/my_application.cc).
+// runMainApp does that as part of its window setup; the mobile path has no
+// reason to, because Android and iOS have no window. So a Linux build using
+// the mobile UI renders correctly into a window that is never made visible:
+// a taskbar entry and a blank preview, and nothing on screen.
+//
+// Deliberately not the rest of runMainApp's setup - no saved-position restore,
+// no always-on-top, no resizability rules - since those are desktop-window
+// behaviours and a phone has none of them.
+Future<void> _revealWindowForMobileUi() async {
+  await windowManager.waitUntilReadyToShow(null, () async {
+    await windowManager.setOpacity(1);
+    await windowManager.setTitle(getWindowName());
+    await windowManager.show();
+    await windowManager.focus();
+  });
 }
 
 void runMultiWindow(
