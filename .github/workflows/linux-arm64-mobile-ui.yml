@@ -29,6 +29,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   FRB_VERSION: "1.80.1"
   CARGO_EXPAND_VERSION: "1.0.95"
+  VCPKG_CMAKE_VERSION: "4.3.0"                                   # upstream CI pins this for this vcpkg commit
   VCPKG_FORCE_SYSTEM_BINARIES: "1"                               # required on arm64: vcpkg ships no arm64 cmake/ninja
 
 jobs:
@@ -52,7 +53,7 @@ jobs:
             libxdo-dev libxfixes-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libasound2-dev libpulse-dev make wget libssl-dev unzip zip \
             libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
-            ca-certificates ninja-build cmake python3 pkg-config xz-utils \
+            ca-certificates ninja-build python3 pkg-config xz-utils \
             autoconf automake libtool autoconf-archive gettext-base file
           # autotools are NOT in upstream's Dockerfile list. Without them vcpkg
           # stops partway at mfx-dispatch and silently never builds opus.
@@ -109,9 +110,27 @@ jobs:
           test -d "$HOME/flutter/bin/cache/artifacts/engine/linux-arm64-release" \
             || { echo "::error::linux-arm64 engine artifacts missing - wrong-arch Dart"; exit 1; }
 
+      - name: Install CMake ${{ env.VCPKG_CMAKE_VERSION }}
+        run: |
+          set -euxo pipefail
+          # Ubuntu 24.04 ships CMake 3.28. This vcpkg commit calls
+          # string(JSON ... STRING_ENCODE) in z_vcpkg_spdx.cmake, which needs
+          # >= 3.31, so aom dies in 2s with "invalid mode 'STRING_ENCODE'".
+          # VCPKG_FORCE_SYSTEM_BINARIES (required on arm64) means vcpkg uses
+          # this one rather than fetching its own, so it has to be new enough.
+          # Debian trixie already ships 3.31.6, so a trixie container does not
+          # need this step - the GitHub runner does.
+          cd /tmp
+          curl -fLO "https://github.com/Kitware/CMake/releases/download/v${VCPKG_CMAKE_VERSION}/cmake-${VCPKG_CMAKE_VERSION}-linux-aarch64.tar.gz"
+          sudo tar -xzf "cmake-${VCPKG_CMAKE_VERSION}-linux-aarch64.tar.gz" -C /opt
+          echo "/opt/cmake-${VCPKG_CMAKE_VERSION}-linux-aarch64/bin" >> $GITHUB_PATH
+
       - name: Set up vcpkg
         run: |
           set -euxo pipefail
+          cmake --version | head -1
+          cmake --version | head -1 | grep -qE 'version (3\.(3[1-9]|[4-9][0-9])|[4-9]\.)' \
+            || { echo "::error::cmake too old for this vcpkg (needs >= 3.31)"; exit 1; }
           git clone https://github.com/microsoft/vcpkg "$HOME/vcpkg"
           git -C "$HOME/vcpkg" checkout "$VCPKG_COMMIT_ID"
           "$HOME/vcpkg"/bootstrap-vcpkg.sh -disableMetrics
