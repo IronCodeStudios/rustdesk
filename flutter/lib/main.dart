@@ -35,6 +35,23 @@ int? kWindowId;
 WindowType? kWindowType;
 late List<String> kBootArgs;
 
+// These first arguments name a process ROLE, not a UI preference. The desktop
+// side spawns each as its own process: the connection manager (`--cm`, from
+// `start_ipc` in src/server/connection.rs, which is compiled in on Linux), an
+// extra session window, and the installer.
+//
+// main() dispatches to the mobile UI before inspecting args, so without this a
+// Linux build using the opt-in would answer every one of those roles with a
+// second copy of the mobile home screen. For `--cm` that means an incoming
+// connection spawns a window that is not the connection manager, so the prompt
+// to accept or reject the session never appears and the peer just waits.
+//
+// Scoped to forceMobileUi, so Android and iOS dispatch exactly as before.
+bool _hasDesktopRoleArg(List<String> args) =>
+    (args.isNotEmpty &&
+        (args.first == 'multi_window' || args.first == '--cm')) ||
+    args.contains('--install');
+
 Future<void> main(List<String> args) async {
   earlyAssert();
   WidgetsFlutterBinding.ensureInitialized();
@@ -42,7 +59,7 @@ Future<void> main(List<String> args) async {
   debugPrint("launch args: $args");
   kBootArgs = List.from(args);
 
-  if (!isDesktop) {
+  if (!isDesktop && !(forceMobileUi && _hasDesktopRoleArg(args))) {
     // A Linux build rendering the mobile UI still owns a real desktop window,
     // unlike Android and iOS. window_manager has to be initialised here so
     // runMobileApp can reveal it; see _revealWindowForMobileUi.

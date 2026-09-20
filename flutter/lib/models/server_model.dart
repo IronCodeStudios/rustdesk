@@ -579,7 +579,10 @@ class ServerModel with ChangeNotifier {
       if (!hideCm) windowOnTop(null);
     });
     // Only do the hidden task when on Desktop.
-    if (client.authorized && isDesktop) {
+    // isDesktopRoleProcess also covers the --cm subprocess of a build using the
+    // mobile-UI opt-in, where isDesktop is false but this is still a real
+    // connection-manager window that should get out of the way once authorised.
+    if (client.authorized && (isDesktop || isDesktopRoleProcess)) {
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
         if (!hideCm) windowManager.minimize();
         cmHiddenTimer = null;
@@ -666,7 +669,11 @@ class ServerModel with ChangeNotifier {
   }
 
   scrollToBottom() {
-    if (isDesktop) return;
+    // `controller` is attached by the mobile ServerPage only. The --cm
+    // subprocess renders DesktopServerPage, which never attaches it, so under
+    // the mobile-UI opt-in isDesktop alone would let this through and
+    // `controller.position` would throw on every incoming connection.
+    if (isDesktop || isDesktopRoleProcess) return;
     Future.delayed(Duration(milliseconds: 200), () {
       controller.animateTo(controller.position.maxScrollExtent,
           duration: Duration(milliseconds: 200),

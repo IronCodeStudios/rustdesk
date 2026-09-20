@@ -29,7 +29,10 @@ class HomePageState extends State<HomePage> {
   int get selectedIndex => _selectedIndex;
   final List<PageShape> _pages = [];
   int _chatPageTabIndex = -1;
-  bool get isChatPageCurrentTab => isAndroid
+  // Must track whichever platforms actually add the chat page in initPages,
+  // otherwise the tab exists but selecting it never clears the chat overlays
+  // or the unread badge. Still false on iOS, which has no chat page.
+  bool get isChatPageCurrentTab => (isAndroid || forceMobileUi)
       ? _selectedIndex == _chatPageTabIndex
       : false; // change this when ios have chat page
 
@@ -52,7 +55,10 @@ class HomePageState extends State<HomePage> {
         appBarActions: [],
       ));
     }
-    if (isAndroid && !bind.isOutgoingOnly()) {
+    // ServerPage is what lets a mobile device accept incoming connections, with
+    // ChatPage alongside it. Without forceMobileUi here a Linux phone would be
+    // outgoing-only: able to control other machines, unreachable itself.
+    if ((isAndroid || forceMobileUi) && !bind.isOutgoingOnly()) {
       _chatPageTabIndex = _pages.length;
       _pages.addAll([ChatPage(type: ChatPageType.mobileMain), ServerPage()]);
     }

@@ -81,6 +81,17 @@ bool _ignoreDevicePixelRatio = true;
 int windowsBuildNumber = 0;
 DesktopType? desktopType;
 
+/// True in a process launched for a desktop role - the connection manager, an
+/// extra session window, the installer - which the desktop side spawns as its
+/// own process. Set from the launch arguments before any UI is built.
+///
+/// Distinct from [isDesktop]: under the mobile-UI opt-in a Linux build reports
+/// isDesktop == false, but a `--cm` subprocess is still a desktop-role window
+/// and must keep desktop behaviour, such as minimising itself once a session is
+/// authorised. Shared code that branches on "am I a desktop window" rather than
+/// "which UI is this" should use this.
+bool get isDesktopRoleProcess => desktopType != null;
+
 // Tolerance used for floating-point position comparisons to avoid precision errors.
 const double _kPositionEpsilon = 1e-6;
 
