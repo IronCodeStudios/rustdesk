@@ -597,7 +597,46 @@ export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
 
 Prefer OrbStack over Docker Desktop — less VM overhead on 8 GB.
 
-### OPEN BLOCKER — arm64 Flutter SDK
+### SOLVED 2026-09-20 — arm64 builds in CI
+
+`.github/workflows/linux-arm64-mobile-ui.yml` produces the aarch64 `.deb` on a
+GitHub-hosted `ubuntu-24.04-arm` runner. Trigger it by hand
+(`workflow_dispatch`, `mobile_ui` defaults true) or by pushing this branch;
+the package lands as a build artifact.
+
+**The recipe.** Flutter ships no arm64 Linux SDK, but that was never the whole
+picture — it *does* publish arm64 Linux **engine** artifacts, GTK embedder
+included, and Dart publishes an arm64 Linux SDK separately. Only the host Dart
+SDK is missing from the tarball:
+
+| Piece | Where |
+|---|---|
+| `dartsdk-linux-arm64-release.zip` 3.5.4 | `storage.googleapis.com/dart-archive/...` |
+| `linux-arm64/artifacts.zip` | `flutter_infra_release/flutter/<engine>/` |
+| `linux-arm64-release/linux-arm64-flutter-gtk.zip` | same — this is the embedder the shipping .deb uses |
+
+So: take the x64 SDK tarball, replace `bin/cache/dart-sdk` with the arm64 one,
+and build natively on an arm64 runner. The same swap upstream already does for
+Windows arm64 in `flutter-build.yml`.
+
+**Three things that bite, all found in ~75 seconds each because the workflow
+verifies the toolchain before building:**
+
+1. `bin/cache/engine-dart-sdk.stamp` must be written with the engine revision,
+   or the next `flutter` invocation re-downloads the x64 SDK over the swap.
+2. `bin/cache/flutter_tools.snapshot` is **also** precompiled x64. An arm64
+   Dart VM refuses it outright — *"the snapshot requires '... x64 linux ...'
+   but the VM has '... arm64 linux ...'"*. Delete it and `flutter_tools.stamp`;
+   `bin/internal/shared.sh` rebuilds the tool with the arm64 Dart.
+3. **Do not name an environment variable `FLUTTER_ENGINE`.** The tool reserves
+   it for the path to a local engine `src/` directory and will try to resolve
+   your revision string as one.
+
+`flutter-elinux` was a dead end. The stale `FLUTTER_ELINUX_VERSION` pointed the
+wrong way, and Sony's releases carry no assets — it is a wrapper you clone.
+
+#### Historical — why this looked blocked
+
 
 Flutter publishes **no arm64 Linux SDK**. Verified against the release manifest:
 0 of 171 stable Linux releases are arm64.
@@ -657,8 +696,28 @@ videoconvert) is already upstream as `377547fa1`; nothing was lost.
 - [x] **Mobile UI renders on x86_64 Linux** — needed the invisible-window fix,
       `6df61ecf1`
 - [x] Input handling audited — 36/37 refs already correct; one keyboard bug fixed
-- [ ] arm64 Flutter SDK solved
-- [ ] Installs and runs on PinePhone Pro
+- [x] **arm64 Flutter SDK solved** — CI workflow builds the aarch64 .deb
+- [ ] Installs and runs on PinePhone Pro ← next, and it is Piney's job
+
+### What the phone has to answer
+
+Everything below is compile-verified only. None of it can be settled on the
+Ryzen rig: no touch input, no phone, and WSLg cannot even be trusted to paint a
+window.
+
+1. **Does it install and launch?** `--no-install-recommends` on the .deb.
+2. **Does the mobile UI actually appear**, in a visible window, at phone size
+   and in portrait — not the 800x600 stretch seen on x86_64.
+3. **Touch.** Tap, scroll, long-press, the gesture helper. This is the 43-ref
+   question the audit could only reason about.
+4. **The keyboard fix** (`873f31c66`). Backspace and Enter must behave like
+   every other key in map mode. Needs a real session to a real peer.
+5. **Incoming connections.** A peer connects: does a connection manager appear
+   and prompt to accept or reject? This is the `--cm` path the dispatch guard
+   was written for, and it has never run on a machine that spawns it.
+6. **Relative mouse mode** on Wayland — deliberately left enabled under the
+   opt-in on the reasoning that mobile never warps the cursor. Untested.
+7. **Does the desktop build still behave** when the opt-in is off.
 
 **Last updated 2026-09-20 by the Ryzen machine.**
 
