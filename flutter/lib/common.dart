@@ -596,7 +596,10 @@ class MyTheme {
 
   static Future<void> changeDarkMode(ThemeMode mode) async {
     Get.changeThemeMode(mode);
-    if (desktopType == DesktopType.main || isAndroid || isIOS || isWeb) {
+    // isMobile rather than isAndroid || isIOS: under the mobile-UI opt-in the
+    // main app has no desktopType, so without this a theme change would apply
+    // for the session and never be written back.
+    if (desktopType == DesktopType.main || isMobile || isWeb) {
       if (mode == ThemeMode.system) {
         await bind.mainSetLocalOption(
             key: kCommConfKeyTheme, value: defaultOptionTheme);
@@ -714,10 +717,18 @@ String formatDurationToTime(Duration duration) {
 }
 
 closeConnection({String? id}) {
-  if (isAndroid || isIOS) {
+  // Must follow the UI, not the OS. A session in the mobile UI is a pushed
+  // route, so leaving it is a pop; on desktop it is a separate window, so
+  // leaving it closes that window. Gated on isAndroid || isIOS this fell to the
+  // window path under the mobile-UI opt-in, where there is no such window: the
+  // dialog dismissed, nothing popped, and the session could not be left at all.
+  if (isMobile) {
     () async {
-      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
-          overlays: SystemUiOverlay.values);
+      // System UI overlays exist only on the phone platforms.
+      if (isAndroid || isIOS) {
+        await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
+            overlays: SystemUiOverlay.values);
+      }
       gFFI.chatModel.hideChatOverlay();
       Navigator.popUntil(globalKey.currentContext!, ModalRoute.withName("/"));
       stateGlobal.isInMainPage = true;

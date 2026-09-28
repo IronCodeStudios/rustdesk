@@ -327,8 +327,10 @@ class _PeersViewState extends State<_PeersView>
         } else {
           final skipIfIsWeb =
               isWeb && !(stateGlobal.isWebVisible && stateGlobal.isInMainPage);
-          final skipIfMobile =
-              (isAndroid || isIOS) && !stateGlobal.isInMainPage;
+          // isMobile, so a Linux phone using the mobile-UI opt-in also stops
+          // polling peer status while it is inside a session. This is a
+          // battery concern, and the devices this targets run on one.
+          final skipIfMobile = isMobile && !stateGlobal.isInMainPage;
           final skipIfNotActive = skipIfIsWeb || skipIfMobile || !_isActive;
           if (!skipIfNotActive && (_queryCount < _maxQueryCount || !p)) {
             if (now.difference(_lastQueryTime) >= _queryInterval) {
